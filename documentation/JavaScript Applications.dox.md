@@ -6,7 +6,7 @@ JavaScript applications are a locally-run form of [HTTP API](https://docs.busy.a
 
 The firmware enumerates installed applications and lists them in the [APPS menu](https://docs.busy.app/bar/apps-and-integrations).
 
-What the runtime does **not** offer at this time: a native display, image, font or animation API, button events, a LED or sound API, file system access, a busy timer API, `require()`, and a way for the script to read its own settings values. The Back key always stops the application.
+Scripts receive button and encoder events through `listen()`. The runtime does **not** offer these at this time: a native display, image, font or animation API, a LED or sound API, file system access, a busy timer API, a native settings API and `require()`. The Back key always stops the application.
 
 # Application structure
 
@@ -115,11 +115,35 @@ Example:
 }
 ```
 
-The launcher stores the values in `/ext/apps_data/jsrunner/<id>.settings.json` as `{"version": N, "values": {...}}`. Groups nest, enums store the option value, color and time store their formatted strings. On the device only boolean, integer and enum fields are editable. The other types are read-only. **No API currently passes these values to the script.**
+The launcher stores the values in `/ext/apps_data/jsrunner/<id>.settings.json` as `{"version": N, "values": {...}}`. Groups nest, enums store the option value, color and time store their formatted strings. On the device only boolean, integer and enum fields are editable. The device shows the other types read-only. The HTTP API reads, replaces and resets the whole document, every field type included (see Installation and management below).
 
-# Installation
+The runtime has no native settings API. A script can read its own values over loopback with `fetch("http://127.0.0.1/api/apps/settings?app_id=<id>")`, because loopback requests need no API token.
 
-Upload every file with `POST /api/assets/upload?application_name=<id>&file=<relative path>` and the file content as the body. Parent directories are created. `DELETE /api/assets/upload?application_name=<id>` removes the application. See @ref http-api. The build bundles applications placed in `applications_js/` in the source tree into the resources.
+# Installation and management
+
+There are two ways to install an application over the HTTP API (see @ref http-api).
+
+**As a package.** The `js_app_installer` service and the `/api/apps` endpoints (API 27.9.0) install a whole application in two steps:
+
+1. Pack the application directory into a TAR or TGZ archive. The directory must be at the top level of the archive and must carry the application id as its name.
+2. Send the archive as the body of `POST /api/apps/stage`. The limit is 100 MiB, and the upload times out after 5 s without data. The service unpacks the archive into `/ext/apps_data/js_app_installer/staging` and looks for the first top-level directory that loads as a valid application. The response carries a single-use `install_key` and the staged application info. If an application with the same id is already installed, the response also carries its info.
+3. Send `POST /api/apps/install?install_key=<key>`. The service removes the installed copy, if any, and moves the staged directory to `/ext/user_assets/<id>`.
+
+A new stage request discards the previous staged package and its key.
+
+**File by file.** Upload every file with `POST /api/assets/upload?application_name=<id>&file=<relative path>` and the file content as the body. The server creates parent directories. `DELETE /api/assets/upload?application_name=<id>` removes the application directory.
+
+Management endpoints:
+
+| Request | Effect |
+| --- | --- |
+| `GET /api/apps/list` | Every installed application with `id`, `name`, `version`, `author`, `description`, `icon_path` and `is_debug`. The list includes debug applications. |
+| `DELETE /api/apps?app_id=<id>` | Removes the application directory. The settings values file stays. |
+| `GET /api/apps/settings?app_id=<id>` | The settings document `{"version": N, "values": {...}}`. The first request writes the defaults. |
+| `PUT /api/apps/settings?app_id=<id>` | Replaces the document. Every field must be present and valid, and the version must match. The server drops unknown keys. |
+| `DELETE /api/apps/settings?app_id=<id>` | Resets every field to its default. |
+
+The build bundles applications placed in `applications_js/` in the source tree into the resources.
 
 JavaScript applications appear in the APPS menu only when the flag file `/ext/apps_data/apps_menu/js_apps_enabled` exists. Create it with the storage CLI or the storage API.
 
@@ -127,11 +151,18 @@ JavaScript applications appear in the APPS menu only when the flag file `/ext/ap
 
 1. The APPS menu launches `js_app_launcher` with the application id.
 2. The launcher shows the Start screen (icon, name, Start and Setup). Setup edits the settings.
-3. Start allocates a runtime context with the manifest heap size, parses `main.js` as a module, links imports and evaluates it. Console output goes to the device log (`console.log` at debug level, `info` at info, `error` at error, tag `JsAppLauncher`).
-4. The application stays alive while it has pending timers or fetches. When none remain, the runtime reports termination and the launcher returns to the Start screen.
-5. Back aborts the script (the VM throws `aborted` inside busy loops, the runtime stops fetches and frees timers) and returns to Start. From Start, Back returns to the APPS menu.
+3. Start shows "Loading..." with a spinner. The launcher allocates a runtime context with the manifest heap size, parses `main.js` as a module, links imports and evaluates it. When the runtime reports that the script started, the screen changes to "Running...". Console output goes to the device log (`console.log` at debug level, `info` at info, `error` at error, tag `JsAppLauncher`).
+4. The application stays alive while it has pending timers, pending fetches or an input listener. When none remain, the runtime reports that the script finished and the launcher returns to the Start screen.
+5. A short Back press aborts the script and returns to Start. The VM throws `aborted` inside busy loops, and the runtime stops fetches, frees timers and removes the input listener. An input listener receives the Back press and release first. From Start, Back returns to the APPS menu.
 
-Errors: a parse or link failure shows "Syntax error, check script.". A missing file or an invalid id shows "App loading failed, reinstall it.". An uncaught exception in top-level code terminates the application silently and logs `JsRunner: Error running script`.
+Errors:
+
+- An invalid or unreadable settings schema stops the launcher before the Start screen. The error screen says "Settings file is invalid." or "Settings storage error.".
+- A parse or link failure shows "Syntax error, check script.".
+- Running out of heap while the script loads shows "App crashed, see device logs.".
+- A missing file or an invalid id shows "App loading failed, reinstall it.".
+- An uncaught exception in top-level code terminates the application silently and logs `JsRunner: Error running script`.
+- A JerryScript fatal error at run time, for example a heap overflow, suspends the script thread. The `supervisor` service then takes over. In Dev mode, or within 30 s of boot, it shows "JavaScript error" or "JavaScript heap overflow" and locks input until a restart. Otherwise it reboots the device.
 
 Limits: one JavaScript context firmware-wide, an 8 KiB application thread stack, 250 KiB per script file, the import root is valid only during the initial evaluation (do all static imports at top level).
 
@@ -146,12 +177,34 @@ Implemented in `applications/services/js_runner/`. Native functions throw `TypeE
 | `console.log`, `console.info`, `console.error` | The runtime stringifies the arguments and joins them with spaces. Objects print as `[object Object]`, use `JSON.stringify`. |
 | `setTimeout(fn, ms)`, `setInterval(fn, ms)` | Exactly two arguments. The runtime raises delays below 10 ms to 10 ms. No extra callback arguments. The runtime prints an exception in a callback as `Uncaught: ...` and the application continues. |
 | `clearTimeout(id)`, `clearInterval(id)` | Same function. |
+| `listen("input", handler)` | Physical controls. See below. |
 | `fetch(input, init)` | See below. |
 | `Request`, `Response`, `Headers`, `URL` | See below. |
 | `localStorage` | Persistent string store. |
 | `AbortController`, `DOMException`, `FormData` | Empty stubs so that libraries can feature-detect them. They do nothing. |
 
 Language: ES modules, `Promise`, `Array`, `Date` (uses the device time and time zone), `JSON`, `Math`, `RegExp`, `String`, `BigInt`, `Map`, `Set`, `WeakMap`, `WeakSet`, `WeakRef`, `DataView`, typed arrays, `SharedArrayBuffer`, `Atomics`, `Proxy`, `globalThis`. Not available: `Reflect`, Annex B functions (`escape`, `substr`, `__proto__` accessors), Unicode case conversion, `TextEncoder`, `atob`, `structuredClone`, `queueMicrotask`, `crypto`, `WebSocket`, `XMLHttpRequest`, `Blob`.
+
+## Input
+
+`listen("input", handler)` subscribes to the physical controls and returns a function that removes the subscription. A script can attach only one handler: a second call throws `TypeError("Handler override is forbidden")`. Any event type other than `"input"` throws `TypeError("Unknown event type")`. Implemented in `js_input.c`.
+
+The handler receives one object per event:
+
+| Control | `key` | `action` | Other fields |
+| --- | --- | --- | --- |
+| Rotary encoder | `"encoder"` | `"clockwise"` or `"counterclockwise"` | `delta`: 1 or -1, one event per step |
+| Start, OK, Back | `"start"`, `"ok"`, `"back"` | `"press"` or `"release"` | |
+
+Short, long and repeat presses are not reported, and neither is the mode switch. An attached listener keeps the application alive. Call the returned function to let the application finish when nothing else is pending. The runtime logs an exception thrown inside the handler.
+
+```js
+let counter = 0;
+const stop = listen("input", (event) => {
+    if (event.key === "encoder") counter += event.delta;
+    if (event.key === "ok" && event.action === "release") counter = 0;
+});
+```
 
 ## fetch
 
@@ -247,9 +300,9 @@ The REPL evaluates each line as a classic script and prints the result. `js -i <
 1. The application is not in the APPS menu: check the `js_apps_enabled` flag file, that the directory name equals the manifest id, that the manifest is at most 512 bytes and parses (log tag `JsAppManifest`), that `scripts/main.js` exists, and that `debug` is false or Dev mode is on.
 2. "Syntax error, check script.": the device log shows `JsRunner: Error parsing script: <file>:<line>: <message>`. A missing module shows `JSGlue: Cannot open file ...`.
 3. "App loading failed, reinstall it.": file error, an invalid id, or another JavaScript context running (`js -k`).
-4. The application returns to Start immediately: top-level code finished without pending timers or fetches, or an uncaught exception occurred.
+4. The application returns to Start immediately: top-level code finished with nothing pending (no timer, fetch or input listener), or an uncaught exception occurred.
 5. Draw calls do nothing: watch the web server log for `... is required` style validation messages and check `application_name` and `display`.
-6. Out of memory: the log shows `JSGlue: jerryscript fatal error` followed by a crash. Raise `heap_size_kib` (up to 512) or reduce live data.
+6. Out of memory: while loading, the launcher shows "App crashed, see device logs." and the log shows `Out of memory`. While running, the supervisor shows "JavaScript heap overflow" in Dev mode, and the device reboots otherwise. Raise `heap_size_kib` (up to 512) or reduce live data.
 
 # Host C API
 
@@ -258,10 +311,13 @@ The REPL evaluates each line as a classic script and prints the result. `js -i <
 | Function | Purpose |
 | --- | --- |
 | `js_runner_context_alloc(runner, app_id, heap_size, console_callback, context)` | Start the application thread and the JerryScript context |
-| `js_runner_run(handle, path, termination_callback, context)` | Parse, link and start evaluating a module file. Returns after parse and link. |
+| `js_runner_run(handle, path, event_callback, context)` | Parse, link and start evaluating a module file. Returns after parse and link. The callback receives `JsRunnerEventTypeScriptStarted` and `JsRunnerEventTypeScriptFinished`. |
 | `js_runner_run_snippet(handle, code, print_result, ...)` | Evaluate a classic script string |
-| `js_runner_join(exec_handle, timeout)` | Wait until no timers or fetches remain |
+| `js_runner_join(exec_handle, timeout)` | Wait until no timers, fetches or input listener remain |
 | `js_runner_abort(exec_handle)`, `js_runner_abort_all(runner)` | Request termination |
 | `js_runner_context_free(handle)` | Stop the thread |
+| `js_runner_get_fatal_pubsub(runner)` | Pubsub of `JsRunnerFatal` codes (`Generic`, `OutOfMemory`) published on a JerryScript fatal error. The supervisor subscribes to it. |
+
+Error codes (`JsRunnerError`): `None`, `Unknown`, `Filesystem`, `OutOfMemory`, `ParseException`, `InvalidAppId`, `Resource`, `Timeout`.
 
 The JerryScript port lives in `targets/f21/jerryscript/jerryscript_glue.c` (context allocation, time and time zone, module file reading, fatal errors). Build flags are in `lib/jerryscript.scons`. The engine is the `flipperdevices/jerryscript` fork, branch `bsb`.

@@ -21,7 +21,7 @@ The `basic_services` metapackage (storage, input, gui, front and back display, f
 | 40 | `power_srv` | `power` | BQ25798 charger, USB-PD, state of charge, battery state machine, power off and reboot | below |
 | 40 | `cli_socket` (hook) | | The CLI on TCP port 23 | @ref cli |
 | 45 | `device_name` | `device_name` | The user-visible device name, validated and persisted, published to MQTT and BLE | @ref storage-and-settings |
-| 50 | `supervisor` | | User-facing fault handling: battery, storage, intercom errors | below |
+| 50 | `supervisor` | | User-facing fault handling: battery, storage, intercom and JavaScript fatal errors | below |
 | 60 | `input` | `input`, `input_events` | Logical input events from the Si917 | @ref user-interface |
 | 60 | `font_registry` (hook) | `font_registry` | Font loading and cache | @ref user-interface |
 | 65 | `canvas` | `CANVAS` | Remote drawing overlay for the HTTP display API | @ref user-interface |
@@ -49,6 +49,7 @@ The `basic_services` metapackage (storage, input, gui, front and back display, f
 | 300 | `update_executor` | | Updater stage only: flashes the images | @ref updater |
 | 310, 320 | `updater`, `update_ui` (hook) | `updater` | Update check, download, staging, automatic updates, update screens | @ref updater |
 | 330 | `low_power` | `low_power` | Reference counted lock. At zero it sleeps the displays and the light sensor. | below |
+| 350 | `js_app_installer` | `js_app_installer` | Unpacks, stages and installs JavaScript application packages for `/api/apps` | @ref javascript-applications |
 | | `web_server` | | Mongoose HTTP server and the API | @ref http-api |
 | | `api_tokens` | `api_tokens` | Bearer tokens for the HTTP API | @ref http-api |
 | | `ca_storage` (hook) | `ca_storage` | Parses the CA bundle once at boot | @ref connectivity |
@@ -100,6 +101,7 @@ Battery state machine: `Normal`, `Low` (below 15%) and `Critical` (below 5%) wit
 | Rebooting | Matter `WillReboot` | Spinner |
 | Storage errors | `/bkp` or `/ext` failed to mount | "Storage error", OK formats or repartitions, resets NVM, reboots |
 | Intercom error | Any intercom error status | "System error, restart device". Dumps logs to `/ext/intercom_failure_log.txt`, reboots after 30 s of uptime unless Dev mode is on. |
+| JavaScript fatal error | A `JsRunnerFatal` code on the `js_runner` fatal pubsub | In Dev mode, or within 30 s of boot to avoid a boot loop: "JavaScript error" or "JavaScript heap overflow", input locked until restart. Otherwise the device reboots at once. |
 
 ## state_publisher
 

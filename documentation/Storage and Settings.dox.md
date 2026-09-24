@@ -36,6 +36,7 @@ The `<appid>` is the application id of the **calling thread**. The same `APP_DAT
 | `/ext/apps_assets/shared/{animations,images,sounds,fonts,ca}` | Shared assets, fonts and the CA bundle |
 | `/ext/apps_assets/web_server/www/` | The built web UI, OpenAPI document and Swagger UI |
 | `/ext/user_assets/<id>/` | User uploaded JavaScript applications and their resources |
+| `/ext/apps_data/js_app_installer/` | JavaScript application package upload (`app.tgz`) and the `staging` directory |
 | `/ext/update/` | Update download and staging area |
 | `/ext/.sys_update.txt`, `/ext/.update_session.json` | Update pointer file and session configuration |
 | `/ext/Manifest` | Resource manifest, used to remove old resources on update |

@@ -11,12 +11,12 @@ The public, user-facing version of this reference lives at [docs.busy.app](https
 | Implementation | Mongoose HTTP server on lwIP sockets, one poll thread (`web_server.c`) |
 | Listener | `http://0.0.0.0`, port 80, all interfaces (USB network and Wi-Fi) |
 | TLS | None. Mbed TLS is linked only for outbound client connections. |
-| API version | `27.7.0` (`http_api/http_api.h`, mirrored in `openapi/openapi.yaml`) |
+| API version | `27.9.0` (`http_api/http_api.h`, mirrored in `openapi/openapi.yaml`) |
 | USB address | `10.0.4.20` by default (see @ref connectivity) |
 | mDNS | `_http._tcp` on port 80, instance `busybar-<usb mac>`, TXT `path=/`, `name=<device name>` |
 | Static root | `/ext/apps_assets/web_server/www` (the built web UI, gzip-only assets) |
 
-Routing is prefix based. The `/api` handler table (`http_api/api_root.c`) dispatches to one file per area: `version`, `transport`, `assets`, `storage`, `display`, `audio`, `input`, `status`, `status/ws`, `wifi`, `update`, `screen`, `ble`, `time`, `name`, `log_dump`, `account`, `busy`, `smart_home`. The root handler serves `access` and `access/tokens` directly. Any path under `/api` that no handler accepts returns 400. The static root serves any other path, and a missing file renders `404.html`.
+Routing is prefix based. The `/api` handler table (`http_api/api_root.c`) dispatches to one file per area: `version`, `transport`, `assets`, `storage`, `display`, `audio`, `input`, `status`, `status/ws`, `wifi`, `update`, `screen`, `ble`, `time`, `name`, `log_dump`, `account`, `busy`, `smart_home`, `apps`. The root handler serves `access` and `access/tokens` directly. Any path under `/api` that no handler accepts returns 400. The static root serves any other path, and a missing file renders `404.html`.
 
 The server processes requests in two phases. Access control and API version checks run when the headers arrive, before the body is read. A rejected request receives 403 and the connection closes. Upload endpoints take over the raw socket at this point and stream the body straight to storage.
 
@@ -26,8 +26,9 @@ The server processes requests in two phases. Access control and API version chec
 | --- | --- |
 | Request body for JSON endpoints | 256 KiB (Mongoose receive buffer) |
 | Update bundle upload | 100 MiB, 413 above |
+| JavaScript application package upload | 100 MiB, 413 above |
 | Storage and asset upload | No explicit cap. Limited by free space. |
-| Upload idle timeout | 3 s for storage and assets, 5 s for update. Returns 408. |
+| Upload idle timeout | 3 s for storage and assets, 5 s for update and application packages. Returns 408. |
 | Overload shedding | Any monitored lwIP pool at 85% or more returns 508 and closes the connection |
 | Status WebSocket clients | 4. A fifth client receives a protobuf error frame and is closed. |
 | Status WebSocket rate | 11 messages per second per client |
@@ -92,7 +93,7 @@ The `Auth` column uses these values: `open` for the whitelisted endpoints, `std`
 
 | Method | Path | Auth | Request | Response |
 | --- | --- | --- | --- | --- |
-| GET | `/api/version` | open | | `{"api_semver":"27.7.0"}` |
+| GET | `/api/version` | open | | `{"api_semver":"27.9.0"}` |
 | GET | `/api/transport` | open | | `{"type":"usb"}` or `{"type":"wifi"}` |
 | GET | `/api/status` | std | | `{device, firmware, system, power}` |
 | GET | `/api/status/device` | std | | `serial_number`, `usb_mac`, `wifi_mac`, `ble_mac`, `otp_valid`, `otp_model`, `otp_timestamp`, `firmware_security` (`secure`, `insecure`, `other`, `unknown`) |
@@ -194,6 +195,22 @@ Every `path` must start with `/ext`, must not contain `..`, and is limited to 63
 | POST | `/api/audio/play` | std | `{"application_name","path"}` or `{"application_name","stock_path"}` | 404 `Failed to play audio` |
 | DELETE | `/api/audio/play` | std | | Held until playback ends. 410 if nothing plays, 503 after 30 s. |
 
+## JavaScript applications
+
+Implemented in `http_api/api_apps.c` and the `js_app_installer` service. `app_id` must match `^[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,31}$`. See @ref javascript-applications for the install flow.
+
+| Method | Path | Auth | Request | Response |
+| --- | --- | --- | --- | --- |
+| POST | `/api/apps/stage` | std | Raw TAR or TGZ body, `Content-Length` required, 100 MiB max | `{"result":"OK","install_key":N,"staged":{AppInfo},"installed":{AppInfo}}`. `installed` is present only if the id is already installed. 400 for an invalid package, 413 if too large, 508 if the save fails. |
+| POST | `/api/apps/install` | std | query `install_key` | Moves the staged application into `/ext/user_assets/<id>`. 400 for a wrong or used key. |
+| GET | `/api/apps/list` | std | | `{"apps":[AppInfo]}`, debug applications included |
+| DELETE | `/api/apps` | std | query `app_id` | Removes the application and keeps its settings. 404 if unknown. |
+| GET | `/api/apps/settings` | std | query `app_id` | `{"version":N,"values":{...}}`. 404 if unknown or without settings, 503 for an invalid schema, 508 for a storage error. |
+| PUT | `/api/apps/settings` | std | query `app_id`, full settings document | Every field must be present and valid, the version must match, unknown keys are dropped. 400 for an invalid document. |
+| DELETE | `/api/apps/settings` | std | query `app_id` | Resets every field to its default |
+
+`AppInfo`: `id`, `name`, `version`, `author`, `description`, `icon_path`, `is_debug`.
+
 ## Update
 
 @ref updater describes the update flow.
@@ -211,7 +228,9 @@ Every `path` must start with `/ext`, must not contain `..`, and is limited to 63
 
 Install `status` values: `ok`, `battery_low`, `busy`, `download_failure`, `download_abort`, `sha_mismatch`, `unpack_staging_dir_failure`, `unpack_archive_open_failure`, `unpack_archive_unpack_failure`, `install_manifest_not_found`, `install_manifest_invalid`, `install_session_config_failure`, `install_pointer_setup_failure`, `unknown_failure`. `action` values: `download`, `sha_verification`, `unpack`, `prepare`, `apply`, `none`. `event` values: `session_start`, `session_stop`, `action_begin`, `action_done`, `detail_change`, `action_progress`, `none`.
 
-There is no endpoint for a plain reboot or for entering DFU. The OpenAPI document marks `POST /api/update` and `GET /api/status/ws` as `x-local-only`, but the firmware applies only the standard access rules to them.
+There is no endpoint for a plain reboot or for entering DFU.
+
+The OpenAPI document marks several routes `x-local-only`: the update upload, the status WebSocket, the account link, unlink and backend change, the Wi-Fi connect, disconnect and scan, and every `/api/apps` route. The firmware applies only the standard access rules to them. The MQTT HTTP proxy refuses most of them separately (see @ref connectivity).
 
 ## Wi-Fi
 

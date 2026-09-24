@@ -31,7 +31,7 @@ The firmware runs on two microcontrollers (see @ref hardware): the STM32U5 main 
 | HTTP API, web UI, OpenAPI | `applications/services/web_server`, `assets/frontend` |
 | Remote drawing on the displays | `applications/services/canvas` |
 | State streaming (WebSocket, BLE, MQTT) | `applications/services/state_publisher`, `assets/proto` |
-| JavaScript applications | `applications/services/js_runner`, `applications/system/js_app_launcher`, `lib/js_app` |
+| JavaScript applications | `applications/services/js_runner`, `applications/services/js_app_installer`, `applications/system/js_app_launcher`, `lib/js_app` |
 | Firmware updates, recovery, factory reset | `applications/system/updater`, `lib/toolbox/update_lib` |
 | Command line interface | `lib/cli`, `applications/services/cli_*` |
 | Secure key storage and provisioning | `targets/f64/furi_hal/furi_hal_crypto_storage.c`, `applications/system/crypto`, `scripts/*_provision.py` |
